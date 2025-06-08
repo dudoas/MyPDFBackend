@@ -81,7 +81,7 @@ def compress_pdf():
 def pdf_to_text():
     """
     API endpoint to receive a PDF and extract text using PyMuPDF.
-    This does NOT perform OCR on image-based PDFs.
+    This does NOT perform OCR on image-based PDFs, only extracts selectable text.
     """
     try:
         data = request.get_json()
@@ -118,4 +118,6 @@ def pdf_to_text():
 
 
 if __name__ == '__main__':
+    # When deploying to PythonAnywhere, the 'app.run' part is not used.
+    # The WSGI file (wsgi.py) handles running the Flask app.
     app.run(debug=True, port=5000)
