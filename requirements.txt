@@ -2,4 +2,5 @@ Flask==2.3.2
 pikepdf==7.4.0
 Flask-Cors==4.0.0
 Pillow==10.3.0
-gunicorn==22.0.0 # Add this line for the web server
+gunicorn==22.0.0
+PyMuPDF==1.23.21
