@@ -44,20 +44,16 @@ def compress_pdf():
 
         # Define highly aggressive compression parameters based on hint
         # jpeg_quality: Lower values mean more compression, lower image quality.
-        # compress_level_pdf: 1 (fastest, least compression) to 9 (slowest, most compression) for FlateDecode streams.
-
+        # We will primarily rely on this for file size reduction.
         jpeg_quality = 40 # Default for 'recommended' image quality (lower for more compression)
-        compress_level_pdf = 7 # Default for general stream compression
 
         if compression_level_hint == 'less':
             jpeg_quality = 75 # Higher image quality, less aggressive compression
-            compress_level_pdf = 4 # Less aggressive FlateDecode compression
         elif compression_level_hint == 'extreme':
             jpeg_quality = 15 # Very low image quality for maximum compression (can be significantly blurry)
-            compress_level_pdf = 9 # Most aggressive FlateDecode compression (slowest but highest ratio for text/vectors)
             
         # Iterate through all images in the PDF and recompress them
-        # This is one of the primary mechanisms for file size reduction
+        # This is the primary mechanism for file size reduction
         for page in pdf.pages:
             for image in page.images:
                 img_obj = pdf.get_object(image)
@@ -73,14 +69,13 @@ def compress_pdf():
                         # but don't fail the whole PDF.
                         print(f"Warning: Could not re-compress image on page {page.index + 1}: {img_err}")
         
-        # --- IMPORTANT FIX: Removed `pdf.remove_unused_resources()` to resolve the persistent error. ---
-        # This method is either not available in your pikepdf version or causes an unexpected conflict.
-        # We will rely on image re-compression and the 'compresslevel' argument in pdf.save() for size reduction.
+        # Removed: pdf.remove_unused_resources() and 'compresslevel' argument from pdf.save()
+        # This addresses the errors seen due to potential pikepdf version inconsistencies on Render.com.
 
         compressed_pdf_stream = BytesIO()
-        # Save the modified PDF. 'compresslevel' applies to FlateDecode streams (text, line art).
-        # This will still offer compression for non-image content.
-        pdf.save(compressed_pdf_stream, compresslevel=compress_level_pdf)
+        # Save the modified PDF without 'compresslevel' or 'q_values' argument.
+        # The image re-compression has already happened.
+        pdf.save(compressed_pdf_stream)
         
         # Rewind the stream to the beginning before reading its content
         compressed_pdf_stream.seek(0)
