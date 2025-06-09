@@ -2,7 +2,8 @@ import io
 import base64
 import os
 from flask import Flask, request, jsonify, Response, send_file
-from pikepdf import Pdf, Page, Image
+# FIX: Removed 'Image' as it's not a direct top-level import from pikepdf
+from pikepdf import Pdf, Page 
 from PIL import Image as PILImage # Import Pillow for image manipulation
 from flask_cors import CORS
 
@@ -64,20 +65,17 @@ def compress_pdf():
                         # Calculate new dimensions based on target DPI
                         # Assume original image was at 72 DPI for calculation of scale
                         # This is an approximation as true DPI might vary.
-                        scale_factor_width = target_dpi / 72.0
-                        scale_factor_height = target_dpi / 72.0
-
+                        # It's better to calculate based on actual image dimensions and target DPI
                         # Ensure new_width and new_height are at least 1 pixel
-                        new_width = max(1, int(original_width * (target_dpi / (img_obj.Width if hasattr(img_obj, 'Width') else 72))))
-                        new_height = max(1, int(original_height * (target_dpi / (img_obj.Height if hasattr(img_obj, 'Height') else 72))))
-
-                        # To prevent excessive upscaling if target_dpi is very high and original image is low res.
-                        # Only downsample or keep original size.
-                        new_width = min(original_width, new_width)
-                        new_height = min(original_height, new_height)
+                        
+                        # Calculate new dimensions based on target DPI, ensuring we don't upscale
+                        # Use min to ensure we only downscale or keep original size
+                        new_width = min(original_width, int(original_width * (target_dpi / 72.0))) 
+                        new_height = min(original_height, int(original_height * (target_dpi / 72.0))) 
 
                         # Resize the image if new dimensions are smaller
                         if new_width < original_width or new_height < original_height:
+                            # Only resize if a reduction in dimensions is needed
                             pil_image = pil_image.resize((new_width, new_height), PILImage.LANCZOS) # LANCZOS for high quality downsampling
                         
                         # Convert to RGB if not already (important for JPEG saving)
