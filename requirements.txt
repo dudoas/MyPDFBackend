@@ -1,6 +1,6 @@
 Flask
 Flask-Cors
 pikepdf
-PyMuPDF # For fitz
-Pillow # <--- Add this line!
-gunicorn # (Still recommended for production)
+PyMuPDF
+Pillow
+gunicorn
