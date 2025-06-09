@@ -3,7 +3,7 @@ import base64
 import os
 import subprocess
 import tempfile
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response, send_file
 from flask_cors import CORS
 
 app = Flask(__name__)
@@ -14,8 +14,8 @@ def home():
     """Simple home route to confirm the backend server is running and Ghostscript is available."""
     try:
         # Check if 'gs' (Ghostscript) command is available
-        subprocess.run(['gs', '--version'], capture_output=True, check=True)
-        ghostscript_status = "Ghostscript is installed and available."
+        result = subprocess.run(['gs', '--version'], capture_output=True, text=True, check=True, timeout=5)
+        ghostscript_status = f"Ghostscript is installed and available. Version: {result.stdout.strip().splitlines()[0]}"
     except Exception as e:
         ghostscript_status = f"Ghostscript is NOT available. Error: {e}. Ensure it's installed via build.sh"
 
@@ -63,12 +63,12 @@ def compress_pdf():
             '-dQUIET',                  # Suppress verbose output
             '-dBATCH',                  # Exit after processing
             '-dSAFER',                  # Enable safer mode for file operations
-            '-dEmbedAllFonts=true',     # Embed all fonts to maintain appearance (can be overridden)
+            '-dEmbedAllFonts=true',     # Embed all fonts to maintain appearance
             '-dSubsetFonts=true',       # Embed only the characters used from fonts
             '-dCompressFonts=true',     # Compress font data
             '-dOptimize=true',          # General PDF optimization
             '-dFastWebView=true',       # Linearize PDF for faster web viewing
-            '-dColorConversionStrategy=/LeaveAlone', # Default to not convert color unless specified
+            '-dColorConversionStrategy=/LeaveAlone', # Default to not convert color unless specified for extreme
             '-dGrayImageDownsampleType=/Bicubic',
             '-dColorImageDownsampleType=/Bicubic',
             '-dMonoImageDownsampleType=/Bicubic',
@@ -77,7 +77,6 @@ def compress_pdf():
         ]
 
         # Apply specific, highly differentiated parameters based on the requested compression level.
-        # We are being EXTREMELY explicit and aggressive here.
         if compression_level_hint == 'extreme':
             # EXTREME COMPRESSION: Aggressively reduce file size, expect SEVERE quality loss.
             app.logger.info("Applying EXTREME compression settings.")
@@ -86,13 +85,12 @@ def compress_pdf():
                 '-dDownsampleColorImages=true',
                 '-dDownsampleGrayImages=true',
                 '-dDownsampleMonoImages=true',
-                '-dColorImageResolution=15',  # EXTREMELY low resolution for color images
-                '-dGrayImageResolution=15',   # EXTREMELY low resolution for grayscale images
-                '-dMonoImageResolution=30',   # VERY low resolution for monochrome images
-                '-dColorImageQuality=0',      # Absolute MINIMUM JPEG quality for color
-                '-dGrayImageQuality=0',       # Absolute MINIMUM JPEG quality for grayscale
-                # Forcing /Average for extreme downsampling
-                '-dColorImageDownsampleType=/Average', 
+                '-dColorImageResolution=30',  # VERY low resolution for color images
+                '-dGrayImageResolution=30',   # VERY low resolution for grayscale images
+                '-dMonoImageResolution=60',   # Low resolution for monochrome images
+                '-dColorImageQuality=5',      # Very low JPEG quality for color (was 0)
+                '-dGrayImageQuality=5',       # Very low JPEG quality for grayscale (was 0)
+                '-dColorImageDownsampleType=/Average', # Faster, more aggressive downsampling
                 '-dGrayImageDownsampleType=/Average',
                 '-dMonoImageDownsampleType=/Average',
                 '-dUseFlateCompression=true', # Try to use Flate where possible for text/line art
@@ -107,7 +105,10 @@ def compress_pdf():
                 '-dPreserveOPIComments=false',# Strip OPI comments
                 '-dPreserveOverprintSettings=false', # Strip overprint settings
                 '-dDetectDuplicateImages=true',
-                '-dMaxSubsetPct=10',           # Aggressive font subsetting (e.g., only 10% of font size is kept)
+                '-dMaxSubsetPct=10',           # Aggressive font subsetting
+                '-sOptimizeForBookmarks=false', # More aggressive optimization
+                '-sPreserveHalftoneInfo=false', # Remove halftone info
+                '-sPreserveOverprint=false', # Remove overprint
             ])
         elif compression_level_hint == 'less':
             # LESS COMPRESSION: Prioritize high quality, with moderate size reduction.
@@ -116,9 +117,9 @@ def compress_pdf():
                 '-dDownsampleColorImages=true',
                 '-dDownsampleGrayImages=true',
                 '-dDownsampleMonoImages=true',
-                '-dColorImageResolution=200', # High resolution
-                '-dGrayImageResolution=200',  
-                '-dMonoImageResolution=400',  
+                '-dColorImageResolution=250', # High resolution
+                '-dGrayImageResolution=250',  
+                '-dMonoImageResolution=500',  
                 '-dColorImageQuality=80',     # High JPEG quality
                 '-dGrayImageQuality=80',      
                 '-dColorImageDownsampleType=/Bicubic', # High quality downsampling
@@ -141,9 +142,9 @@ def compress_pdf():
                 '-dDownsampleColorImages=true',
                 '-dDownsampleGrayImages=true',
                 '-dDownsampleMonoImages=true',
-                '-dColorImageResolution=100', # Moderate resolution
-                '-dGrayImageResolution=100',  
-                '-dMonoImageResolution=200',  
+                '-dColorImageResolution=120', # Moderate resolution
+                '-dGrayImageResolution=120',  
+                '-dMonoImageResolution=250',  
                 '-dColorImageQuality=40',     # Medium JPEG quality
                 '-dGrayImageQuality=40',      
                 '-dColorImageDownsampleType=/Bicubic',
