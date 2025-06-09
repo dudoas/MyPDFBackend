@@ -42,18 +42,19 @@ def compress_pdf():
         # Open the PDF using pikepdf
         pdf = pikepdf.open(original_pdf_stream)
 
-        # Define highly aggressive compression parameters based on hint
+        # Define highly aggressive image compression parameters based on hint
         # jpeg_quality: Lower values mean more compression, lower image quality.
-        # We will primarily rely on this for file size reduction.
-        jpeg_quality = 40 # Default for 'recommended' image quality (lower for more compression)
+        # This is the primary lever we have for affecting compression significantly.
+
+        jpeg_quality = 50 # Default for 'recommended' image quality (moderate reduction)
 
         if compression_level_hint == 'less':
-            jpeg_quality = 75 # Higher image quality, less aggressive compression
+            jpeg_quality = 85 # Higher image quality, less aggressive compression
         elif compression_level_hint == 'extreme':
-            jpeg_quality = 15 # Very low image quality for maximum compression (can be significantly blurry)
+            jpeg_quality = 10 # VERY LOW image quality for maximum compression (significant visual degradation expected)
             
         # Iterate through all images in the PDF and recompress them
-        # This is the primary mechanism for file size reduction
+        # This is the primary mechanism for file size reduction that has proven compatible.
         for page in pdf.pages:
             for image in page.images:
                 img_obj = pdf.get_object(image)
@@ -69,12 +70,12 @@ def compress_pdf():
                         # but don't fail the whole PDF.
                         print(f"Warning: Could not re-compress image on page {page.index + 1}: {img_err}")
         
-        # Removed: pdf.remove_unused_resources() and 'compresslevel' argument from pdf.save()
-        # This addresses the errors seen due to potential pikepdf version inconsistencies on Render.com.
+        # The 'remove_unused_resources()' and 'compresslevel' arguments are intentionally omitted
+        # from pdf.save() due to persistent compatibility issues on Render.com.
+        # We are relying solely on the image re-compression for configurable size reduction.
 
         compressed_pdf_stream = BytesIO()
-        # Save the modified PDF without 'compresslevel' or 'q_values' argument.
-        # The image re-compression has already happened.
+        # Save the modified PDF.
         pdf.save(compressed_pdf_stream)
         
         # Rewind the stream to the beginning before reading its content
@@ -125,8 +126,7 @@ def pdf_to_text():
         # Iterate through each page and extract text
         for page_num in range(len(doc)):
             page = doc.load_page(page_num)
-            # Use 'text' output for plain text.
-            # PyMuPDF is excellent at handling Unicode, so this should extract correctly.
+            # Using default 'text' output which handles Unicode well.
             extracted_text += page.get_text("text") 
         
         doc.close() # Close the document after extraction
@@ -136,7 +136,6 @@ def pdf_to_text():
         text_filename = f"{name}_extracted.txt"
 
         # Encode the extracted text to base64 using UTF-8.
-        # This is the correct way for handling all Unicode characters from Python.
         text_base64 = base64.b64encode(extracted_text.encode('utf-8')).decode('utf-8')
 
         # Return the success response with base64 encoded text and metadata
