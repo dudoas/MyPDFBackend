@@ -42,32 +42,39 @@ def compress_pdf():
         # Open the PDF using pikepdf
         pdf = pikepdf.open(original_pdf_stream)
 
-        # Set JPEG quality based on compression level hint
-        jpeg_quality = 0.75 # Default for 'recommended'
+        # Define compression parameters based on hint
+        jpeg_quality = 0.75 # Default for 'recommended' image quality
+        compress_level_pdf = 6 # Default for general stream compression (FlateDecode)
+
         if compression_level_hint == 'less':
-            jpeg_quality = 0.90 # Higher quality, less compression
+            jpeg_quality = 0.90 # Higher image quality, less compression
+            compress_level_pdf = 1 # Faster, less aggressive FlateDecode compression
         elif compression_level_hint == 'extreme':
-            jpeg_quality = 0.50 # Lower quality, more compression
+            jpeg_quality = 0.50 # Lower image quality, more compression
+            compress_level_pdf = 9 # Slower, most aggressive FlateDecode compression
 
         # Iterate through all images in the PDF and recompress them
-        # This is the primary mechanism for file size reduction
+        # This is one of the primary mechanisms for file size reduction
         for page in pdf.pages:
             for image in page.images:
                 img_obj = pdf.get_object(image)
                 # Ensure it's an image object and recompress as JPEG
                 if img_obj.Type == '/XObject' and img_obj.Subtype == '/Image':
                     try:
-                        # Convert to PIL Image and then write back as JPEG with specified quality
                         pil_image = img_obj.as_pil_image()
+                        # Apply specified JPEG quality during image write
                         img_obj.write(pil_image, file_format='jpeg', q=jpeg_quality)
                     except Exception as img_err:
                         # Log if an image cannot be processed, but don't fail the whole PDF
                         print(f"Warning: Could not re-compress image on page {page.index + 1}: {img_err}")
         
+        # Remove unused objects and optimize PDF streams for further compression
+        # This can help reduce overhead and apply general compression settings.
+        pdf.remove_unused_resources()
+
         compressed_pdf_stream = BytesIO()
-        # Save the modified PDF. Removed 'q_values' as it caused an error.
-        # Image compression is already handled in the loop above.
-        pdf.save(compressed_pdf_stream) 
+        # Save the modified PDF. The 'compresslevel' argument here applies to general streams (e.g., FlateDecode for text).
+        pdf.save(compressed_pdf_stream, compresslevel=compress_level_pdf)
         
         # Rewind the stream to the beginning before reading its content
         compressed_pdf_stream.seek(0)
