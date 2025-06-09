@@ -13,10 +13,13 @@ CORS(app)
 def home():
     """Simple home route to confirm the backend server is running and Ghostscript is available."""
     try:
+        # Check if 'gs' (Ghostscript) command is available
         result = subprocess.run(['gs', '--version'], capture_output=True, text=True, check=True, timeout=5)
-        ghostscript_status = f"Ghostscript is installed and available. Version: {result.stdout.strip().splitlines()[0]}"
+        ghostscript_version_line = next((line for line in result.stdout.splitlines() if "Ghostscript" in line), "Unknown version")
+        ghostscript_status = f"Ghostscript is installed and available. {ghostscript_version_line}"
     except Exception as e:
         ghostscript_status = f"Ghostscript is NOT available. Error: {e}. Ensure it's installed via build.sh"
+        app.logger.error(f"Ghostscript availability check failed: {e}")
 
     return f"PDF Processing Backend (Ghostscript Tuned Compression) is running! {ghostscript_status}"
 
@@ -45,7 +48,7 @@ def compress_pdf():
             temp_input_path = temp_input_pdf.name
 
         with tempfile.NamedTemporaryFile(delete=False, suffix="_compressed.pdf") as temp_output_pdf:
-            temp_output_pdf.write(b'') 
+            temp_output_pdf.write(b'') # Ensure file is created before passing path
             temp_output_path = temp_output_pdf.name
         
         original_size_bytes = len(pdf_bytes)
@@ -60,33 +63,34 @@ def compress_pdf():
             '-dQUIET',                  # Suppress verbose output
             '-dBATCH',                  # Exit after processing
             '-dSAFER',                  # Enable safer mode for file operations
+            '-dEmbedAllFonts=true',     # Default: Embed all fonts
+            '-dSubsetFonts=true',       # Default: Subset fonts
+            '-dCompressFonts=true',     # Default: Compress font data
+            '-dOptimize=true',          # Default: General PDF optimization
+            '-dFastWebView=true',       # Default: Linearize PDF for faster web viewing
+            '-dDetectDuplicateImages=true', # Default: Detect and remove duplicate images
             f'-sOutputFile={temp_output_path}', # Specify output file path
             temp_input_path             # Specify input file path
         ]
 
         # Apply distinct parameters based on the requested compression level.
-        # Leveraging -dPDFSETTINGS for robust base compression, then layering specifics.
+        # Leveraging -dPDFSETTINGS as a BASELINE, then explicitly overriding for fine-tuning.
         if compression_level_hint == 'extreme':
             # EXTREME COMPRESSION: Force grayscale, very low resolution and quality.
-            app.logger.info("Applying EXTREME compression settings (FORCING GRAYSCALE).")
+            app.logger.info("Applying EXTREME compression settings (FORCING GRAYSCALE & LOWEST QUALITY).")
             ghostscript_command.extend([
                 '-sProcessColorModel=DeviceGray', # *** CRITICAL: Convert ALL colors to grayscale ***
-                '-dPDFSETTINGS=/screen',        # Optimized for screen viewing (72dpi), smallest size
-                '-dColorImageResolution=72',    # Explicitly set low resolution for color (now gray)
-                '-dGrayImageResolution=72',     # Explicitly set low resolution for grayscale
-                '-dMonoImageResolution=72',     # Explicitly set low resolution for monochrome
-                '-dColorImageQuality=1',        # Very low JPEG quality for color (now gray)
-                '-dGrayImageQuality=1',         # Very low JPEG quality for grayscale
+                '-dPDFSETTINGS=/screen',        # Base preset for smallest size (72dpi)
+                '-dColorImageResolution=50',    # Explicitly low resolution for color (now gray)
+                '-dGrayImageResolution=50',     # Explicitly low resolution for grayscale
+                '-dMonoImageResolution=72',     # Low resolution for monochrome
+                '-dColorImageQuality=5',        # Very low JPEG quality for color (now gray)
+                '-dGrayImageQuality=5',         # Very low JPEG quality for grayscale
                 '-dColorImageDownsampleType=/Average', # Fastest, most aggressive downsampling
                 '-dGrayImageDownsampleType=/Average',
                 '-dMonoImageDownsampleType=/Average',
-                '-dEmbedAllFonts=false',        # Do NOT embed all fonts for absolute minimum size (can break appearance)
-                '-dSubsetFonts=true',           # Still subset fonts for text, but don't embed all
-                '-dMaxSubsetPct=10',            # Aggressive font subsetting (e.g., only 10% of font size is kept)
-                '-dCompressFonts=true',
-                '-dFastWebView=true',
-                '-dDetectDuplicateImages=true',
-                '-dOptimize=true',
+                '-dEmbedAllFonts=false',        # Try not to embed all fonts for max size reduction
+                '-dMaxSubsetPct=10',            # Aggressive font subsetting
                 '-sOptimizeForBookmarks=false', 
                 '-sPreserveHalftoneInfo=false', 
                 '-sPreserveOverprint=false',
@@ -95,41 +99,31 @@ def compress_pdf():
             # LESS COMPRESSION: High quality, moderate reduction.
             app.logger.info("Applying LESS compression settings.")
             ghostscript_command.extend([
-                '-dPDFSETTINGS=/printer',       # Optimized for high-quality printing (300dpi)
+                '-dPDFSETTINGS=/printer',       # Base preset for high quality (300dpi)
                 '-dColorImageResolution=300',   # High resolution for color
                 '-dGrayImageResolution=300',    # High resolution for grayscale
                 '-dMonoImageResolution=600',    # High resolution for monochrome
-                '-dColorImageQuality=85',       # High JPEG quality
-                '-dGrayImageQuality=85',
+                '-dColorImageQuality=80',       # High JPEG quality
+                '-dGrayImageQuality=80',
                 '-dColorImageDownsampleType=/Bicubic', # High quality downsampling
                 '-dGrayImageDownsampleType=/Bicubic',
                 '-dMonoImageDownsampleType=/Bicubic',
-                '-dEmbedAllFonts=true',
-                '-dSubsetFonts=true',
-                '-dCompressFonts=true',
-                '-dFastWebView=true',
-                '-dDetectDuplicateImages=true',
-                '-dOptimize=true',
+                '-dMaxSubsetPct=100',           # Full font subsetting
             ])
         else: # 'recommended' or any other unsupported level defaults to recommended
             # RECOMMENDED COMPRESSION: Balanced quality and size.
             app.logger.info("Applying RECOMMENDED compression settings.")
             ghostscript_command.extend([
-                '-dPDFSETTINGS=/ebook',         # Optimized for eBook distribution (150dpi)
+                '-dPDFSETTINGS=/ebook',         # Base preset for balanced size (150dpi)
                 '-dColorImageResolution=150',   # Moderate resolution for color
                 '-dGrayImageResolution=150',    # Moderate resolution for grayscale
                 '-dMonoImageResolution=300',    # Standard resolution for monochrome
-                '-dColorImageQuality=50',       # Medium JPEG quality
-                '-dGrayImageQuality=50',
+                '-dColorImageQuality=40',       # Medium JPEG quality
+                '-dGrayImageQuality=40',
                 '-dColorImageDownsampleType=/Bicubic',
                 '-dGrayImageDownsampleType=/Bicubic',
                 '-dMonoImageDownsampleType=/Bicubic',
-                '-dEmbedAllFonts=true',
-                '-dSubsetFonts=true',
-                '-dCompressFonts=true',
-                '-dFastWebView=true',
-                '-dDetectDuplicateImages=true',
-                '-dOptimize=true',
+                '-dMaxSubsetPct=50',            # Moderate font subsetting
             ])
 
         app.logger.info(f"Final Ghostscript command being executed: {' '.join(ghostscript_command)}")
