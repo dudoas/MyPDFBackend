@@ -3,7 +3,7 @@ import base64
 import os
 import subprocess
 import tempfile
-from flask import Flask, request, jsonify, Response, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
@@ -63,39 +63,51 @@ def compress_pdf():
             '-dQUIET',                  # Suppress verbose output
             '-dBATCH',                  # Exit after processing
             '-dSAFER',                  # Enable safer mode for file operations
-            '-dEmbedAllFonts=true',     # Embed all fonts to maintain appearance
+            '-dEmbedAllFonts=true',     # Embed all fonts to maintain appearance (can be overridden)
             '-dSubsetFonts=true',       # Embed only the characters used from fonts
             '-dCompressFonts=true',     # Compress font data
             '-dOptimize=true',          # General PDF optimization
             '-dFastWebView=true',       # Linearize PDF for faster web viewing
+            '-dColorConversionStrategy=/LeaveAlone', # Default to not convert color unless specified
+            '-dGrayImageDownsampleType=/Bicubic',
+            '-dColorImageDownsampleType=/Bicubic',
+            '-dMonoImageDownsampleType=/Bicubic',
             f'-sOutputFile={temp_output_path}', # Specify output file path
             temp_input_path             # Specify input file path
         ]
 
         # Apply specific, highly differentiated parameters based on the requested compression level.
-        # These settings primarily control image resolution and JPEG quality.
+        # We are being EXTREMELY explicit and aggressive here.
         if compression_level_hint == 'extreme':
-            # EXTREME COMPRESSION: Aggressively reduce file size, expect severe quality loss.
+            # EXTREME COMPRESSION: Aggressively reduce file size, expect SEVERE quality loss.
             app.logger.info("Applying EXTREME compression settings.")
             ghostscript_command.extend([
-                '-sProcessColorModel=DeviceGray', # Convert all colors to grayscale - HUGE reducer!
+                '-sProcessColorModel=DeviceGray', # *** CRITICAL: Convert all colors to grayscale ***
                 '-dDownsampleColorImages=true',
                 '-dDownsampleGrayImages=true',
                 '-dDownsampleMonoImages=true',
-                '-dColorImageResolution=20',  # VERY low resolution for color images
-                '-dGrayImageResolution=20',   # VERY low resolution for grayscale images
-                '-dMonoImageResolution=50',   # Low resolution for monochrome images
-                '-dJPEGQ=1',                  # EXTREMELY low JPEG quality (1 is basically blocky)
-                '-dColorImageDownsampleType=/Average', # Faster, more aggressive downsampling
+                '-dColorImageResolution=15',  # EXTREMELY low resolution for color images
+                '-dGrayImageResolution=15',   # EXTREMELY low resolution for grayscale images
+                '-dMonoImageResolution=30',   # VERY low resolution for monochrome images
+                '-dColorImageQuality=0',      # Absolute MINIMUM JPEG quality for color
+                '-dGrayImageQuality=0',       # Absolute MINIMUM JPEG quality for grayscale
+                # Forcing /Average for extreme downsampling
+                '-dColorImageDownsampleType=/Average', 
                 '-dGrayImageDownsampleType=/Average',
                 '-dMonoImageDownsampleType=/Average',
-                '-dPreserveEPSInfo=false',    # Remove EPS metadata
-                '-dPreserveOPIComments=false',# Remove OPI comments
-                '-dPreserveOverprintSettings=false', # Remove overprint settings
+                '-dUseFlateCompression=true', # Try to use Flate where possible for text/line art
                 '-dEncodeColorImages=true',   # Force re-encoding of all images
                 '-dEncodeGrayImages=true',
                 '-dEncodeMonoImages=true',
-                '-dPDFSETTINGS=/screen',      # Base setting for aggressive compression
+                '-dAutoFilterColorImages=true', # Let GS choose best filter
+                '-dAutoFilterGrayImages=true',
+                '-dColorImageFilter=/DCTEncode', # Force JPEG compression for color
+                '-dGrayImageFilter=/DCTEncode', # Force JPEG compression for grayscale
+                '-dPreserveEPSInfo=false',    # Strip EPS metadata
+                '-dPreserveOPIComments=false',# Strip OPI comments
+                '-dPreserveOverprintSettings=false', # Strip overprint settings
+                '-dDetectDuplicateImages=true',
+                '-dMaxSubsetPct=10',           # Aggressive font subsetting (e.g., only 10% of font size is kept)
             ])
         elif compression_level_hint == 'less':
             # LESS COMPRESSION: Prioritize high quality, with moderate size reduction.
@@ -104,14 +116,23 @@ def compress_pdf():
                 '-dDownsampleColorImages=true',
                 '-dDownsampleGrayImages=true',
                 '-dDownsampleMonoImages=true',
-                '-dColorImageResolution=250', # High resolution for color
-                '-dGrayImageResolution=250',  # High resolution for grayscale
-                '-dMonoImageResolution=500',  # Good resolution for monochrome
-                '-dJPEGQ=70',                 # High JPEG quality (more detail preserved)
-                '-dColorImageDownsampleType=/Bicubic', # Higher quality downsampling
+                '-dColorImageResolution=200', # High resolution
+                '-dGrayImageResolution=200',  
+                '-dMonoImageResolution=400',  
+                '-dColorImageQuality=80',     # High JPEG quality
+                '-dGrayImageQuality=80',      
+                '-dColorImageDownsampleType=/Bicubic', # High quality downsampling
                 '-dGrayImageDownsampleType=/Bicubic',
                 '-dMonoImageDownsampleType=/Bicubic',
-                '-dPDFSETTINGS=/printer',     # Base setting for high quality
+                '-dUseFlateCompression=true',
+                '-dEncodeColorImages=true',
+                '-dEncodeGrayImages=true',
+                '-dEncodeMonoImages=true',
+                '-dAutoFilterColorImages=true',
+                '-dAutoFilterGrayImages=true',
+                '-dColorImageFilter=/DCTEncode',
+                '-dGrayImageFilter=/DCTEncode',
+                '-dMaxSubsetPct=100',           # Max font subsetting (full font)
             ])
         else: # 'recommended' or any other unsupported level defaults to recommended
             # RECOMMENDED COMPRESSION: Good balance between file size and quality.
@@ -120,14 +141,23 @@ def compress_pdf():
                 '-dDownsampleColorImages=true',
                 '-dDownsampleGrayImages=true',
                 '-dDownsampleMonoImages=true',
-                '-dColorImageResolution=120', # Moderate resolution for color
-                '-dGrayImageResolution=120',  # Moderate resolution for grayscale
-                '-dMonoImageResolution=250',  # Standard resolution for monochrome
-                '-dJPEGQ=35',                 # Medium JPEG quality
+                '-dColorImageResolution=100', # Moderate resolution
+                '-dGrayImageResolution=100',  
+                '-dMonoImageResolution=200',  
+                '-dColorImageQuality=40',     # Medium JPEG quality
+                '-dGrayImageQuality=40',      
                 '-dColorImageDownsampleType=/Bicubic',
                 '-dGrayImageDownsampleType=/Bicubic',
                 '-dMonoImageDownsampleType=/Bicubic',
-                '-dPDFSETTINGS=/ebook',       # Base setting for balanced compression
+                '-dUseFlateCompression=true',
+                '-dEncodeColorImages=true',
+                '-dEncodeGrayImages=true',
+                '-dEncodeMonoImages=true',
+                '-dAutoFilterColorImages=true',
+                '-dAutoFilterGrayImages=true',
+                '-dColorImageFilter=/DCTEncode',
+                '-dGrayImageFilter=/DCTEncode',
+                '-dMaxSubsetPct=50',           # Moderate font subsetting
             ])
 
         app.logger.info(f"Final Ghostscript command being executed: {' '.join(ghostscript_command)}")
@@ -154,7 +184,8 @@ def compress_pdf():
 
         # Construct the output filename
         name, ext = os.path.splitext(original_filename)
-        compressed_filename = f"{name}_compressed_{compression_level_hint}{ext}" # Added level to filename for clarity
+        # Added compression level to the filename for easy identification of test results
+        compressed_filename = f"{name}_compressed_{compression_level_hint}{ext}" 
 
         # Return success response with compressed data and sizes
         return jsonify({
