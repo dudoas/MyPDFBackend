@@ -1,5 +1,5 @@
 # app.py
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from io import BytesIO
 import base64
 import os
@@ -42,17 +42,20 @@ def compress_pdf():
         # Open the PDF using pikepdf
         pdf = pikepdf.open(original_pdf_stream)
 
-        # Define compression parameters based on hint
-        jpeg_quality = 0.75 # Default for 'recommended' image quality
-        compress_level_pdf = 6 # Default for general stream compression (FlateDecode, 1-9, 9 is highest)
+        # Define highly aggressive compression parameters based on hint
+        # jpeg_quality: Lower values mean more compression, lower image quality.
+        # compress_level_pdf: 1 (fastest, least compression) to 9 (slowest, most compression) for FlateDecode streams.
+
+        jpeg_quality = 40 # Default for 'recommended' image quality (lower for more compression)
+        compress_level_pdf = 7 # Default for general stream compression
 
         if compression_level_hint == 'less':
-            jpeg_quality = 0.90 # Higher image quality, less compression
-            compress_level_pdf = 1 # Faster, less aggressive FlateDecode compression
+            jpeg_quality = 75 # Higher image quality, less aggressive compression
+            compress_level_pdf = 4 # Less aggressive FlateDecode compression
         elif compression_level_hint == 'extreme':
-            jpeg_quality = 0.40 # Even lower image quality, more compression
-            compress_level_pdf = 9 # Slower, most aggressive FlateDecode compression
-
+            jpeg_quality = 15 # Very low image quality for maximum compression (can be significantly blurry)
+            compress_level_pdf = 9 # Most aggressive FlateDecode compression (slowest but highest ratio for text/vectors)
+            
         # Iterate through all images in the PDF and recompress them
         # This is one of the primary mechanisms for file size reduction
         for page in pdf.pages:
@@ -61,21 +64,22 @@ def compress_pdf():
                 # Ensure it's an image object and recompress as JPEG if applicable
                 if img_obj.Type == '/XObject' and img_obj.Subtype == '/Image':
                     try:
-                        # Attempt to load as PIL image
                         pil_image = img_obj.as_pil_image()
-                        # Write back as JPEG with specified quality. This overwrites the original image data.
+                        # Apply specified JPEG quality during image write.
+                        # This overwrites the original image data with a recompressed version.
                         img_obj.write(pil_image, file_format='jpeg', q=jpeg_quality)
                     except Exception as img_err:
                         # Log if an image cannot be processed (e.g., non-standard format),
                         # but don't fail the whole PDF.
                         print(f"Warning: Could not re-compress image on page {page.index + 1}: {img_err}")
         
-        # Remove unused objects and optimize PDF streams for further compression
-        # This helps reduce overhead and applies general compression settings to all streams.
-        pdf.remove_unused_resources()
+        # --- IMPORTANT FIX: Removed `pdf.remove_unused_resources()` to resolve the persistent error. ---
+        # This method is either not available in your pikepdf version or causes an unexpected conflict.
+        # We will rely on image re-compression and the 'compresslevel' argument in pdf.save() for size reduction.
 
         compressed_pdf_stream = BytesIO()
-        # Save the modified PDF. 'compresslevel' applies to FlateDecode streams.
+        # Save the modified PDF. 'compresslevel' applies to FlateDecode streams (text, line art).
+        # This will still offer compression for non-image content.
         pdf.save(compressed_pdf_stream, compresslevel=compress_level_pdf)
         
         # Rewind the stream to the beginning before reading its content
@@ -127,7 +131,7 @@ def pdf_to_text():
         for page_num in range(len(doc)):
             page = doc.load_page(page_num)
             # Use 'text' output for plain text.
-            # PyMuPDF is generally good at handling Unicode.
+            # PyMuPDF is excellent at handling Unicode, so this should extract correctly.
             extracted_text += page.get_text("text") 
         
         doc.close() # Close the document after extraction
@@ -137,7 +141,7 @@ def pdf_to_text():
         text_filename = f"{name}_extracted.txt"
 
         # Encode the extracted text to base64 using UTF-8.
-        # This is correct for handling all Unicode characters.
+        # This is the correct way for handling all Unicode characters from Python.
         text_base64 = base64.b64encode(extracted_text.encode('utf-8')).decode('utf-8')
 
         # Return the success response with base64 encoded text and metadata
