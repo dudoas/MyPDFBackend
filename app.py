@@ -2,8 +2,7 @@ import io
 import base64
 import os
 from flask import Flask, request, jsonify, Response, send_file
-# FIX: Removed 'Image' as it's not a direct top-level import from pikepdf
-from pikepdf import Pdf, Page 
+from pikepdf import Pdf, Page # Page is still useful for iterating pages
 from PIL import Image as PILImage # Import Pillow for image manipulation
 from flask_cors import CORS
 
@@ -20,7 +19,7 @@ def compress_pdf():
     """
     API endpoint to receive a PDF file (base64 encoded), compress it using pikepdf,
     and return the compressed PDF (also base64 encoded).
-    This version includes image downsampling.
+    This version includes image downsampling and corrects pikepdf usage.
     """
     try:
         data = request.get_json()
@@ -62,23 +61,18 @@ def compress_pdf():
                         
                         original_width, original_height = pil_image.size
                         
-                        # Calculate new dimensions based on target DPI
-                        # Assume original image was at 72 DPI for calculation of scale
-                        # This is an approximation as true DPI might vary.
-                        # It's better to calculate based on actual image dimensions and target DPI
-                        # Ensure new_width and new_height are at least 1 pixel
-                        
                         # Calculate new dimensions based on target DPI, ensuring we don't upscale
                         # Use min to ensure we only downscale or keep original size
-                        new_width = min(original_width, int(original_width * (target_dpi / 72.0))) 
-                        new_height = min(original_height, int(original_height * (target_dpi / 72.0))) 
+                        # A common base DPI for PDF images is 72, so we scale relative to that.
+                        new_width = min(original_width, int(original_width * (target_dpi / 72.0)))
+                        new_height = min(original_height, int(original_height * (target_dpi / 72.0)))
 
                         # Resize the image if new dimensions are smaller
                         if new_width < original_width or new_height < original_height:
                             # Only resize if a reduction in dimensions is needed
                             pil_image = pil_image.resize((new_width, new_height), PILImage.LANCZOS) # LANCZOS for high quality downsampling
                         
-                        # Convert to RGB if not already (important for JPEG saving)
+                        # Convert to RGB if not already (important for JPEG saving, and some PDF images might be grayscale/CMYK)
                         if pil_image.mode != 'RGB':
                             pil_image = pil_image.convert('RGB')
 
@@ -86,16 +80,17 @@ def compress_pdf():
                         img_obj.write(pil_image, file_format='jpeg', q=jpeg_quality)
 
                     except Exception as img_err:
-                        app.logger.warning(f"Warning: Could not re-compress image (possibly non-standard format) on page {page.index + 1}: {img_err}")
+                        # Log a warning if an image cannot be processed (e.g., non-standard format, corrupt)
+                        app.logger.warning(f"Warning: Could not re-compress image on page {page.index + 1}: {img_err}")
             
-            # Also apply general content stream compression for text/line art
-            # This is less effective than image compression for photo-heavy PDFs
-            page.compress_content_streams()
+            # This line caused the AttributeError. pikepdf handles content stream compression differently.
+            # Instead, we rely on pdf.add_compression() for general stream compression.
+            # page.compress_content_streams() # REMOVED: This is not a pikepdf Page method
 
-        # Try to add overall compression filter, which might help for text/vector data.
-        # This can sometimes cause issues with certain PDF viewers if not correctly handled.
-        # It's less crucial if image compression is aggressive.
-        pdf.add_compression()
+        # Apply general stream compression across the entire PDF.
+        # This compresses text, vector graphics, and metadata streams.
+        # This is the correct way to get general compression in pikepdf after image re-encoding.
+        pdf.add_compression() 
 
         compressed_pdf_stream = io.BytesIO()
         pdf.save(compressed_pdf_stream)
@@ -160,6 +155,4 @@ def pdf_to_text():
         return jsonify({'error': f'Failed to extract text from PDF: {str(e)}'}), 500
 
 if __name__ == '__main__':
-    # This block is for local development only.
-    # On Render.com, gunicorn (specified in Procfile) runs the app.
     app.run(debug=True, port=int(os.environ.get('PORT', 5000)))
