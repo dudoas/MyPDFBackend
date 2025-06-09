@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
-
-# Install Ghostscript
-sudo apt-get update
-sudo apt-get install -y ghostscript
-
-# Proceed with standard Python build process (installing dependencies from requirements.txt)
+# Update package lists and install Ghostscript
+apt-get update -y && apt-get install -y ghostscript
+# Install Python dependencies
 pip install -r requirements.txt
