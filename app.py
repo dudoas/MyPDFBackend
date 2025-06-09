@@ -11,8 +11,15 @@ CORS(app)
 
 @app.route('/')
 def home():
-    """Simple home route to confirm the backend server is running."""
-    return "PDF Processing Backend (Ghostscript Tuned Compression) is running!"
+    """Simple home route to confirm the backend server is running and Ghostscript is available."""
+    try:
+        # Check if 'gs' (Ghostscript) command is available
+        subprocess.run(['gs', '--version'], capture_output=True, check=True)
+        ghostscript_status = "Ghostscript is installed and available."
+    except Exception as e:
+        ghostscript_status = f"Ghostscript is NOT available. Error: {e}. Ensure it's installed via build.sh"
+
+    return f"PDF Processing Backend (Ghostscript Tuned Compression) is running! {ghostscript_status}"
 
 @app.route('/compress-pdf', methods=['POST'])
 def compress_pdf():
@@ -39,10 +46,12 @@ def compress_pdf():
             temp_input_path = temp_input_pdf.name
 
         with tempfile.NamedTemporaryFile(delete=False, suffix="_compressed.pdf") as temp_output_pdf:
-            temp_output_pdf.write(b'') # Ensure file is created before passing path
+            # Important: Ensure the file is actually created/touched before passing path
+            temp_output_pdf.write(b'') 
             temp_output_path = temp_output_pdf.name
         
-        original_size_kb = len(pdf_bytes) / 1024
+        original_size_bytes = len(pdf_bytes)
+        original_size_kb = original_size_bytes / 1024
 
         # Base Ghostscript parameters common to all compression levels
         # These settings ensure PDF generation and basic optimizations are applied.
@@ -66,56 +75,62 @@ def compress_pdf():
         # Apply specific, highly differentiated parameters based on the requested compression level.
         # These settings primarily control image resolution and JPEG quality.
         if compression_level_hint == 'extreme':
-            # EXTREME COMPRESSION: Aggressively reduce file size, expect significant quality loss.
-            # Targeting a resolution even lower than Ghostscript's /screen preset (72 dpi)
+            # EXTREME COMPRESSION: Aggressively reduce file size, expect severe quality loss.
+            app.logger.info("Applying EXTREME compression settings.")
             ghostscript_command.extend([
+                '-sProcessColorModel=DeviceGray', # Convert all colors to grayscale - HUGE reducer!
                 '-dDownsampleColorImages=true',
                 '-dDownsampleGrayImages=true',
                 '-dDownsampleMonoImages=true',
-                '-dColorImageResolution=30',  # VERY low resolution for color images
-                '-dGrayImageResolution=30',   # VERY low resolution for grayscale images
-                '-dMonoImageResolution=72',   # Low resolution for monochrome images (for basic readability)
-                '-dJPEGQ=2',                  # EXTREMELY low JPEG quality (0-100, 2 is almost pixelated)
+                '-dColorImageResolution=20',  # VERY low resolution for color images
+                '-dGrayImageResolution=20',   # VERY low resolution for grayscale images
+                '-dMonoImageResolution=50',   # Low resolution for monochrome images
+                '-dJPEGQ=1',                  # EXTREMELY low JPEG quality (1 is basically blocky)
                 '-dColorImageDownsampleType=/Average', # Faster, more aggressive downsampling
                 '-dGrayImageDownsampleType=/Average',
                 '-dMonoImageDownsampleType=/Average',
                 '-dPreserveEPSInfo=false',    # Remove EPS metadata
                 '-dPreserveOPIComments=false',# Remove OPI comments
                 '-dPreserveOverprintSettings=false', # Remove overprint settings
-                '-dDetectDuplicateImages=true', # Try to deduplicate images
+                '-dEncodeColorImages=true',   # Force re-encoding of all images
+                '-dEncodeGrayImages=true',
+                '-dEncodeMonoImages=true',
+                '-dPDFSETTINGS=/screen',      # Base setting for aggressive compression
             ])
         elif compression_level_hint == 'less':
             # LESS COMPRESSION: Prioritize high quality, with moderate size reduction.
-            # Uses higher resolutions and better JPEG quality.
+            app.logger.info("Applying LESS compression settings.")
             ghostscript_command.extend([
                 '-dDownsampleColorImages=true',
                 '-dDownsampleGrayImages=true',
                 '-dDownsampleMonoImages=true',
-                '-dColorImageResolution=200', # High resolution for color
-                '-dGrayImageResolution=200',  # High resolution for grayscale
-                '-dMonoImageResolution=400',  # Good resolution for monochrome
-                '-dJPEGQ=60',                 # Higher JPEG quality (more detail preserved)
+                '-dColorImageResolution=250', # High resolution for color
+                '-dGrayImageResolution=250',  # High resolution for grayscale
+                '-dMonoImageResolution=500',  # Good resolution for monochrome
+                '-dJPEGQ=70',                 # High JPEG quality (more detail preserved)
                 '-dColorImageDownsampleType=/Bicubic', # Higher quality downsampling
                 '-dGrayImageDownsampleType=/Bicubic',
                 '-dMonoImageDownsampleType=/Bicubic',
+                '-dPDFSETTINGS=/printer',     # Base setting for high quality
             ])
         else: # 'recommended' or any other unsupported level defaults to recommended
             # RECOMMENDED COMPRESSION: Good balance between file size and quality.
-            # Uses moderate resolutions and medium JPEG quality.
+            app.logger.info("Applying RECOMMENDED compression settings.")
             ghostscript_command.extend([
                 '-dDownsampleColorImages=true',
                 '-dDownsampleGrayImages=true',
                 '-dDownsampleMonoImages=true',
-                '-dColorImageResolution=90',  # Moderate resolution for color
-                '-dGrayImageResolution=90',   # Moderate resolution for grayscale
-                '-dMonoImageResolution=150',  # Standard resolution for monochrome
-                '-dJPEGQ=20',                 # Medium JPEG quality
+                '-dColorImageResolution=120', # Moderate resolution for color
+                '-dGrayImageResolution=120',  # Moderate resolution for grayscale
+                '-dMonoImageResolution=250',  # Standard resolution for monochrome
+                '-dJPEGQ=35',                 # Medium JPEG quality
                 '-dColorImageDownsampleType=/Bicubic',
                 '-dGrayImageDownsampleType=/Bicubic',
                 '-dMonoImageDownsampleType=/Bicubic',
+                '-dPDFSETTINGS=/ebook',       # Base setting for balanced compression
             ])
 
-        app.logger.info(f"Executing Ghostscript command: {' '.join(ghostscript_command)}")
+        app.logger.info(f"Final Ghostscript command being executed: {' '.join(ghostscript_command)}")
         
         # Execute Ghostscript command and capture output
         result = subprocess.run(ghostscript_command, capture_output=True, text=True, check=False)
@@ -139,7 +154,7 @@ def compress_pdf():
 
         # Construct the output filename
         name, ext = os.path.splitext(original_filename)
-        compressed_filename = f"{name}_compressed{ext}"
+        compressed_filename = f"{name}_compressed_{compression_level_hint}{ext}" # Added level to filename for clarity
 
         # Return success response with compressed data and sizes
         return jsonify({
@@ -147,7 +162,8 @@ def compress_pdf():
             'isBase64Encoded': True, # Indicate that the body is Base64 encoded
             'fileName': compressed_filename,
             'originalSize': original_size_kb,
-            'compressedSize': compressed_size_kb
+            'compressedSize': compressed_size_kb,
+            'compressionLevelApplied': compression_level_hint # Confirm applied level
         }), 200
 
     except Exception as e:
