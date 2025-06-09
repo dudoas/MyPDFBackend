@@ -65,10 +65,9 @@ def compress_pdf():
                         print(f"Warning: Could not re-compress image on page {page.index + 1}: {img_err}")
         
         compressed_pdf_stream = BytesIO()
-        # Save the modified PDF. q_values applies compression to different filter types.
-        pdf.save(compressed_pdf_stream, 
-                 q_values={'/FlateDecode': 1.0, '/DCTDecode': jpeg_quality}
-                )
+        # Save the modified PDF. Removed 'q_values' as it caused an error.
+        # Image compression is already handled in the loop above.
+        pdf.save(compressed_pdf_stream) 
         
         # Rewind the stream to the beginning before reading its content
         compressed_pdf_stream.seek(0)
@@ -131,7 +130,7 @@ def pdf_to_text():
 
         # Return the success response with base64 encoded text and metadata
         return jsonify({
-            'fileContentBase64': text_base64,
+            'fileContentBase64': text_base64, # This is the key that the frontend expects
             'fileName': text_filename,
             'mimeType': 'text/plain' # Specify the MIME type for the extracted text
         }), 200
