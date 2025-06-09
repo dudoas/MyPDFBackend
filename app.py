@@ -2,8 +2,8 @@ import io
 import base64
 import os
 from flask import Flask, request, jsonify, Response, send_file
-from pikepdf import Pdf, Page # Page is still useful for iterating pages
-from PIL import Image as PILImage # Import Pillow for image manipulation
+from pikepdf import Pdf, Page
+from PIL import Image as PILImage
 from flask_cors import CORS
 
 app = Flask(__name__)
@@ -19,7 +19,7 @@ def compress_pdf():
     """
     API endpoint to receive a PDF file (base64 encoded), compress it using pikepdf,
     and return the compressed PDF (also base64 encoded).
-    This version includes image downsampling and corrects pikepdf usage.
+    This version includes image downsampling and quality reduction.
     """
     try:
         data = request.get_json()
@@ -69,8 +69,7 @@ def compress_pdf():
 
                         # Resize the image if new dimensions are smaller
                         if new_width < original_width or new_height < original_height:
-                            # Only resize if a reduction in dimensions is needed
-                            pil_image = pil_image.resize((new_width, new_height), PILImage.LANCZOS) # LANCZOS for high quality downsampling
+                            pil_image = pil_image.resize((new_width, new_height), PILImage.LANCZOS)
                         
                         # Convert to RGB if not already (important for JPEG saving, and some PDF images might be grayscale/CMYK)
                         if pil_image.mode != 'RGB':
@@ -80,20 +79,18 @@ def compress_pdf():
                         img_obj.write(pil_image, file_format='jpeg', q=jpeg_quality)
 
                     except Exception as img_err:
-                        # Log a warning if an image cannot be processed (e.g., non-standard format, corrupt)
                         app.logger.warning(f"Warning: Could not re-compress image on page {page.index + 1}: {img_err}")
             
-            # This line caused the AttributeError. pikepdf handles content stream compression differently.
-            # Instead, we rely on pdf.add_compression() for general stream compression.
-            # page.compress_content_streams() # REMOVED: This is not a pikepdf Page method
-
-        # Apply general stream compression across the entire PDF.
-        # This compresses text, vector graphics, and metadata streams.
-        # This is the correct way to get general compression in pikepdf after image re-encoding.
-        pdf.add_compression() 
+            # The 'compress_content_streams' method is not a direct page method in pikepdf
+            # and was removed in the previous fix.
+            # pdf.add_compression() was removed in this fix as it caused an AttributeError.
+            # Image compression (above) is the most impactful step for file size reduction.
 
         compressed_pdf_stream = io.BytesIO()
-        pdf.save(compressed_pdf_stream)
+        # For general PDF stream optimization, pikepdf usually handles it implicitly
+        # or through the 'optimize_version' parameter of pdf.save().
+        # Explicitly setting optimize_version=True can help remove unused objects and streams.
+        pdf.save(compressed_pdf_stream, optimize_version=True) # Added optimize_version=True
         compressed_pdf_stream.seek(0)
 
         compressed_pdf_base64 = base64.b64encode(compressed_pdf_stream.getvalue()).decode('utf-8')
