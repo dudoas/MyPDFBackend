@@ -2,8 +2,8 @@ import io
 import base64
 import os
 from flask import Flask, request, jsonify, Response, send_file
-from pikepdf import Pdf, Page
-from PIL import Image as PILImage
+from pikepdf import Pdf, Page, Object, Name # Import Object and Name for explicit image handling
+from PIL import Image as PILImage # Import Pillow for image manipulation
 from flask_cors import CORS
 
 app = Flask(__name__)
@@ -19,7 +19,7 @@ def compress_pdf():
     """
     API endpoint to receive a PDF file (base64 encoded), compress it using pikepdf,
     and return the compressed PDF (also base64 encoded).
-    This version includes image downsampling and quality reduction.
+    This version includes image downsampling and quality reduction, using a robust save method.
     """
     try:
         data = request.get_json()
@@ -37,8 +37,6 @@ def compress_pdf():
         pdf = Pdf.open(original_pdf_stream)
 
         # Define compression parameters based on the selected level
-        # target_dpi: Lower DPI means more aggressive downsampling (smaller image size, lower quality)
-        # jpeg_quality: Lower quality means more compression for JPEG images
         if compression_level_hint == 'less':
             target_dpi = 300 # Keep original resolution for higher quality (or slightly reduce)
             jpeg_quality = 85 # High quality JPEG
@@ -55,15 +53,13 @@ def compress_pdf():
                 img_obj = pdf.get_object(image)
                 
                 # Check if it's an image object and if we can convert it to PIL image
-                if img_obj.Type == '/XObject' and img_obj.Subtype == '/Image':
+                if img_obj.Type == Name('/XObject') and img_obj.Subtype == Name('/Image'):
                     try:
                         pil_image = img_obj.as_pil_image()
                         
                         original_width, original_height = pil_image.size
                         
                         # Calculate new dimensions based on target DPI, ensuring we don't upscale
-                        # Use min to ensure we only downscale or keep original size
-                        # A common base DPI for PDF images is 72, so we scale relative to that.
                         new_width = min(original_width, int(original_width * (target_dpi / 72.0)))
                         new_height = min(original_height, int(original_height * (target_dpi / 72.0)))
 
@@ -71,7 +67,7 @@ def compress_pdf():
                         if new_width < original_width or new_height < original_height:
                             pil_image = pil_image.resize((new_width, new_height), PILImage.LANCZOS)
                         
-                        # Convert to RGB if not already (important for JPEG saving, and some PDF images might be grayscale/CMYK)
+                        # Convert to RGB if not already (important for JPEG saving, some images might be grayscale/CMYK)
                         if pil_image.mode != 'RGB':
                             pil_image = pil_image.convert('RGB')
 
@@ -81,16 +77,10 @@ def compress_pdf():
                     except Exception as img_err:
                         app.logger.warning(f"Warning: Could not re-compress image on page {page.index + 1}: {img_err}")
             
-            # The 'compress_content_streams' method is not a direct page method in pikepdf
-            # and was removed in the previous fix.
-            # pdf.add_compression() was removed in this fix as it caused an AttributeError.
-            # Image compression (above) is the most impactful step for file size reduction.
-
         compressed_pdf_stream = io.BytesIO()
-        # For general PDF stream optimization, pikepdf usually handles it implicitly
-        # or through the 'optimize_version' parameter of pdf.save().
-        # Explicitly setting optimize_version=True can help remove unused objects and streams.
-        pdf.save(compressed_pdf_stream, optimize_version=True) # Added optimize_version=True
+        # Save the modified PDF. pikepdf's default save is often efficient enough after image manipulation.
+        # Removing `optimize_version` which caused the TypeError.
+        pdf.save(compressed_pdf_stream) 
         compressed_pdf_stream.seek(0)
 
         compressed_pdf_base64 = base64.b64encode(compressed_pdf_stream.getvalue()).decode('utf-8')
