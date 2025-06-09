@@ -1,9 +1,11 @@
 import io
 import base64
 import os
+import subprocess # For calling external commands like Ghostscript
+import tempfile # For creating temporary files safely
 from flask import Flask, request, jsonify, Response, send_file
-from pikepdf import Pdf, Page, Object, Name # Import Object and Name for explicit image handling
-from PIL import Image as PILImage # Import Pillow for image manipulation
+from pikepdf import Pdf, Page, Object, Name
+from PIL import Image as PILImage
 from flask_cors import CORS
 
 app = Flask(__name__)
@@ -12,14 +14,13 @@ CORS(app)
 @app.route('/')
 def home():
     """Simple home route to confirm the backend server is running."""
-    return "PDF Processing Backend (Pikepdf & PyMuPDF with Enhanced Compression) is running!"
+    return "PDF Processing Backend (Pikepdf & PyMuPDF with Ghostscript Compression) is running!"
 
 @app.route('/compress-pdf', methods=['POST'])
 def compress_pdf():
     """
-    API endpoint to receive a PDF file (base64 encoded), compress it using pikepdf,
+    API endpoint to receive a PDF file (base64 encoded), compress it using Ghostscript,
     and return the compressed PDF (also base64 encoded).
-    This version includes image downsampling and quality reduction, using a robust save method.
     """
     try:
         data = request.get_json()
@@ -31,59 +32,67 @@ def compress_pdf():
         compression_level_hint = data.get('compressionLevel', 'recommended')
 
         pdf_bytes = base64.b64decode(pdf_file_base64)
-        original_pdf_stream = io.BytesIO(pdf_bytes)
+        
+        # Create temporary input and output files
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_input_pdf:
+            temp_input_pdf.write(pdf_bytes)
+            temp_input_path = temp_input_pdf.name
 
-        # Open the PDF using pikepdf
-        pdf = Pdf.open(original_pdf_stream)
+        with tempfile.NamedTemporaryFile(delete=False, suffix="_compressed.pdf") as temp_output_pdf:
+            temp_output_path = temp_output_pdf.name
+        
+        original_size_kb = len(pdf_bytes) / 1024
 
-        # Define compression parameters based on the selected level
-        if compression_level_hint == 'less':
-            target_dpi = 300 # Keep original resolution for higher quality (or slightly reduce)
-            jpeg_quality = 85 # High quality JPEG
-        elif compression_level_hint == 'extreme':
-            target_dpi = 72 # Very aggressive downsampling for max compression
-            jpeg_quality = 10 # Very low quality JPEG
-        else: # 'recommended'
-            target_dpi = 150 # Moderate downsampling
-            jpeg_quality = 50 # Moderate quality JPEG
+        # Map compression levels to Ghostscript presets
+        # /screen: lowest quality, smallest size (e.g., 72 DPI images)
+        # /ebook: better quality than screen, but still highly compressed (e.g., 150 DPI images)
+        # /printer: higher quality, larger size (e.g., 300 DPI images)
+        # /prepress: highest quality, largest size (no downsampling, high quality)
+        gs_setting = '/ebook' # Default
+        if compression_level_hint == 'extreme':
+            gs_setting = '/screen'
+        elif compression_level_hint == 'less':
+            gs_setting = '/printer' # Use /printer for 'less' compression (higher quality)
 
-        # Iterate through all pages and images to apply compression
-        for page in pdf.pages:
-            for image in page.images:
-                img_obj = pdf.get_object(image)
-                
-                # Check if it's an image object and if we can convert it to PIL image
-                if img_obj.Type == Name('/XObject') and img_obj.Subtype == Name('/Image'):
-                    try:
-                        pil_image = img_obj.as_pil_image()
-                        
-                        original_width, original_height = pil_image.size
-                        
-                        # Calculate new dimensions based on target DPI, ensuring we don't upscale
-                        new_width = min(original_width, int(original_width * (target_dpi / 72.0)))
-                        new_height = min(original_height, int(original_height * (target_dpi / 72.0)))
+        # Ghostscript command
+        # -sDEVICE=pdfwrite: Output to PDF
+        # -dCompatibilityLevel=1.4: For broader compatibility
+        # -dPDFSETTINGS=/...: Apply the chosen preset
+        # -dNOPAUSE -dQUIET -dBATCH: Standard options for non-interactive use
+        # -sOutputFile: Output file path
+        # -: Reads input from stdin (we'll use a temp file for simplicity here)
+        ghostscript_command = [
+            'gs',
+            '-sDEVICE=pdfwrite',
+            '-dCompatibilityLevel=1.4',
+            f'-dPDFSETTINGS={gs_setting}',
+            '-dNOPAUSE',
+            '-dQUIET',
+            '-dBATCH',
+            f'-sOutputFile={temp_output_path}',
+            temp_input_path # Input file
+        ]
 
-                        # Resize the image if new dimensions are smaller
-                        if new_width < original_width or new_height < original_height:
-                            pil_image = pil_image.resize((new_width, new_height), PILImage.LANCZOS)
-                        
-                        # Convert to RGB if not already (important for JPEG saving, some images might be grayscale/CMYK)
-                        if pil_image.mode != 'RGB':
-                            pil_image = pil_image.convert('RGB')
+        app.logger.info(f"Executing Ghostscript command: {' '.join(ghostscript_command)}")
+        
+        # Execute the Ghostscript command
+        result = subprocess.run(ghostscript_command, capture_output=True, text=True)
 
-                        # Save the recompressed image back to the PDF object
-                        img_obj.write(pil_image, file_format='jpeg', q=jpeg_quality)
+        # Check for errors from Ghostscript
+        if result.returncode != 0:
+            raise Exception(f"Ghostscript compression failed: {result.stderr}")
 
-                    except Exception as img_err:
-                        app.logger.warning(f"Warning: Could not re-compress image on page {page.index + 1}: {img_err}")
-            
-        compressed_pdf_stream = io.BytesIO()
-        # Save the modified PDF. pikepdf's default save is often efficient enough after image manipulation.
-        # Removing `optimize_version` which caused the TypeError.
-        pdf.save(compressed_pdf_stream) 
-        compressed_pdf_stream.seek(0)
+        # Read the compressed PDF bytes
+        with open(temp_output_path, 'rb') as f:
+            compressed_pdf_bytes = f.read()
 
-        compressed_pdf_base64 = base64.b64encode(compressed_pdf_stream.getvalue()).decode('utf-8')
+        compressed_size_kb = len(compressed_pdf_bytes) / 1024
+
+        # Clean up temporary files
+        os.unlink(temp_input_pdf.name)
+        os.unlink(temp_output_pdf.name)
+
+        compressed_pdf_base64 = base64.b64encode(compressed_pdf_bytes).decode('utf-8')
 
         name, ext = os.path.splitext(original_filename)
         compressed_filename = f"{name}_compressed{ext}"
@@ -92,12 +101,17 @@ def compress_pdf():
             'body': compressed_pdf_base64,
             'isBase64Encoded': True,
             'fileName': compressed_filename,
-            'originalSize': len(pdf_bytes),
-            'compressedSize': len(compressed_pdf_stream.getvalue())
+            'originalSize': original_size_kb, # Use actual original size from frontend
+            'compressedSize': compressed_size_kb
         }), 200
 
     except Exception as e:
         app.logger.error(f"Error compressing PDF: {e}", exc_info=True)
+        # Ensure temporary files are cleaned up even on error
+        if 'temp_input_path' in locals() and os.path.exists(temp_input_path):
+            os.unlink(temp_input_path)
+        if 'temp_output_path' in locals() and os.path.exists(temp_output_path):
+            os.unlink(temp_output_path)
         return jsonify({'error': f'Failed to compress PDF: {str(e)}'}), 500
 
 @app.route('/pdf-to-text', methods=['POST'])
