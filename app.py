@@ -44,13 +44,13 @@ def compress_pdf():
 
         # Define compression parameters based on hint
         jpeg_quality = 0.75 # Default for 'recommended' image quality
-        compress_level_pdf = 6 # Default for general stream compression (FlateDecode)
+        compress_level_pdf = 6 # Default for general stream compression (FlateDecode, 1-9, 9 is highest)
 
         if compression_level_hint == 'less':
             jpeg_quality = 0.90 # Higher image quality, less compression
             compress_level_pdf = 1 # Faster, less aggressive FlateDecode compression
         elif compression_level_hint == 'extreme':
-            jpeg_quality = 0.50 # Lower image quality, more compression
+            jpeg_quality = 0.40 # Even lower image quality, more compression
             compress_level_pdf = 9 # Slower, most aggressive FlateDecode compression
 
         # Iterate through all images in the PDF and recompress them
@@ -58,22 +58,24 @@ def compress_pdf():
         for page in pdf.pages:
             for image in page.images:
                 img_obj = pdf.get_object(image)
-                # Ensure it's an image object and recompress as JPEG
+                # Ensure it's an image object and recompress as JPEG if applicable
                 if img_obj.Type == '/XObject' and img_obj.Subtype == '/Image':
                     try:
+                        # Attempt to load as PIL image
                         pil_image = img_obj.as_pil_image()
-                        # Apply specified JPEG quality during image write
+                        # Write back as JPEG with specified quality. This overwrites the original image data.
                         img_obj.write(pil_image, file_format='jpeg', q=jpeg_quality)
                     except Exception as img_err:
-                        # Log if an image cannot be processed, but don't fail the whole PDF
+                        # Log if an image cannot be processed (e.g., non-standard format),
+                        # but don't fail the whole PDF.
                         print(f"Warning: Could not re-compress image on page {page.index + 1}: {img_err}")
         
         # Remove unused objects and optimize PDF streams for further compression
-        # This can help reduce overhead and apply general compression settings.
+        # This helps reduce overhead and applies general compression settings to all streams.
         pdf.remove_unused_resources()
 
         compressed_pdf_stream = BytesIO()
-        # Save the modified PDF. The 'compresslevel' argument here applies to general streams (e.g., FlateDecode for text).
+        # Save the modified PDF. 'compresslevel' applies to FlateDecode streams.
         pdf.save(compressed_pdf_stream, compresslevel=compress_level_pdf)
         
         # Rewind the stream to the beginning before reading its content
@@ -124,7 +126,9 @@ def pdf_to_text():
         # Iterate through each page and extract text
         for page_num in range(len(doc)):
             page = doc.load_page(page_num)
-            extracted_text += page.get_text() # Get text from the page
+            # Use 'text' output for plain text.
+            # PyMuPDF is generally good at handling Unicode.
+            extracted_text += page.get_text("text") 
         
         doc.close() # Close the document after extraction
 
@@ -132,7 +136,8 @@ def pdf_to_text():
         name, ext = os.path.splitext(original_filename)
         text_filename = f"{name}_extracted.txt"
 
-        # Encode the extracted text to base64 for sending back to the frontend
+        # Encode the extracted text to base64 using UTF-8.
+        # This is correct for handling all Unicode characters.
         text_base64 = base64.b64encode(extracted_text.encode('utf-8')).decode('utf-8')
 
         # Return the success response with base64 encoded text and metadata
