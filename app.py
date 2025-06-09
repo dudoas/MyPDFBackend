@@ -1,11 +1,9 @@
 import io
 import base64
 import os
-import subprocess # For calling external commands like Ghostscript
-import tempfile # For creating temporary files safely
+import subprocess
+import tempfile
 from flask import Flask, request, jsonify, Response, send_file
-from pikepdf import Pdf, Page, Object, Name
-from PIL import Image as PILImage
 from flask_cors import CORS
 
 app = Flask(__name__)
@@ -14,13 +12,13 @@ CORS(app)
 @app.route('/')
 def home():
     """Simple home route to confirm the backend server is running."""
-    return "PDF Processing Backend (Pikepdf & PyMuPDF with Ghostscript Compression) is running!"
+    return "PDF Processing Backend (Ghostscript Tuned Compression) is running!"
 
 @app.route('/compress-pdf', methods=['POST'])
 def compress_pdf():
     """
-    API endpoint to receive a PDF file (base64 encoded), compress it using Ghostscript,
-    and return the compressed PDF (also base64 encoded).
+    API endpoint to receive a PDF file (base64 encoded), compress it using Ghostscript
+    with granular controls tuned for target percentages, and return the compressed PDF.
     """
     try:
         data = request.get_json()
@@ -43,44 +41,74 @@ def compress_pdf():
         
         original_size_kb = len(pdf_bytes) / 1024
 
-        # Map compression levels to Ghostscript presets
-        # /screen: lowest quality, smallest size (e.g., 72 DPI images)
-        # /ebook: better quality than screen, but still highly compressed (e.g., 150 DPI images)
-        # /printer: higher quality, larger size (e.g., 300 DPI images)
-        # /prepress: highest quality, largest size (no downsampling, high quality)
-        gs_setting = '/ebook' # Default
-        if compression_level_hint == 'extreme':
-            gs_setting = '/screen'
-        elif compression_level_hint == 'less':
-            gs_setting = '/printer' # Use /printer for 'less' compression (higher quality)
-
-        # Ghostscript command
-        # -sDEVICE=pdfwrite: Output to PDF
-        # -dCompatibilityLevel=1.4: For broader compatibility
-        # -dPDFSETTINGS=/...: Apply the chosen preset
-        # -dNOPAUSE -dQUIET -dBATCH: Standard options for non-interactive use
-        # -sOutputFile: Output file path
-        # -: Reads input from stdin (we'll use a temp file for simplicity here)
+        # Ghostscript command base
+        # These are common settings that contribute to overall PDF size reduction
         ghostscript_command = [
             'gs',
             '-sDEVICE=pdfwrite',
-            '-dCompatibilityLevel=1.4',
-            f'-dPDFSETTINGS={gs_setting}',
+            '-dCompatibilityLevel=1.4', # For broader compatibility
             '-dNOPAUSE',
             '-dQUIET',
             '-dBATCH',
+            '-dDetectDuplicateImages=true', # Try to deduplicate images
+            '-dEmbedAllFonts=true',       # Ensure text is still rendered
+            '-dSubsetFonts=true',         # Subset fonts (embed only characters used)
+            '-dCompressFonts=true',       # Compress font data
+            '-dOptimize=true',            # General optimization
+            '-dFastWebView=true',         # Linearize PDF for faster web viewing
+            '-dColorImageDownsampleType=/Bicubic', # High-quality downsampling for images
+            '-dGrayImageDownsampleType=/Bicubic',
+            '-dMonoImageDownsampleType=/Bicubic',
             f'-sOutputFile={temp_output_path}',
             temp_input_path # Input file
         ]
 
+        # Apply granular compression settings based on level
+        if compression_level_hint == 'extreme':
+            # Aim for ~90% reduction: Very low DPI and quality for images
+            ghostscript_command.extend([
+                '-dDownsampleColorImages=true',
+                '-dDownsampleGrayImages=true',
+                '-dDownsampleMonoImages=true', # Even monochrome images for extreme
+                '-dColorImageResolution=40',   # Very low resolution for color images
+                '-dGrayImageResolution=40',    # Very low resolution for grayscale images
+                '-dMonoImageResolution=150',   # Keep mono low but readable
+                '-dJPEGQ=8',                   # Extremely low JPEG quality (can cause blockiness)
+            ])
+        elif compression_level_hint == 'recommended':
+            # Aim for ~60% reduction: Moderate DPI and quality
+            ghostscript_command.extend([
+                '-dDownsampleColorImages=true',
+                '-dDownsampleGrayImages=true',
+                '-dDownsampleMonoImages=true',
+                '-dColorImageResolution=120',  # Medium resolution
+                '-dGrayImageResolution=120',
+                '-dMonoImageResolution=300',   # Standard mono resolution
+                '-dJPEGQ=30',                  # Medium JPEG quality
+            ])
+        else: # 'less' compression
+            # Aim for ~35% reduction: Higher DPI and quality
+            ghostscript_command.extend([
+                '-dDownsampleColorImages=true', # Still downsample to reduce some size
+                '-dDownsampleGrayImages=true',
+                '-dDownsampleMonoImages=true',
+                '-dColorImageResolution=250',  # High resolution
+                '-dGrayImageResolution=250',
+                '-dMonoImageResolution=600',   # Good mono resolution
+                '-dJPEGQ=70',                  # High JPEG quality
+            ])
+
         app.logger.info(f"Executing Ghostscript command: {' '.join(ghostscript_command)}")
         
-        # Execute the Ghostscript command
-        result = subprocess.run(ghostscript_command, capture_output=True, text=True)
+        result = subprocess.run(ghostscript_command, capture_output=True, text=True, check=False)
 
-        # Check for errors from Ghostscript
         if result.returncode != 0:
-            raise Exception(f"Ghostscript compression failed: {result.stderr}")
+            app.logger.error(f"Ghostscript compression failed (Return Code: {result.returncode}): {result.stderr}")
+            # Try to read and return a more specific error if possible
+            if "GPL Ghostscript" not in result.stderr and result.stderr.strip():
+                raise Exception(f"Ghostscript compression failed: {result.stderr.strip()}")
+            else:
+                raise Exception(f"Ghostscript compression failed with exit code {result.returncode}. Check server logs for details.")
 
         # Read the compressed PDF bytes
         with open(temp_output_path, 'rb') as f:
@@ -89,8 +117,8 @@ def compress_pdf():
         compressed_size_kb = len(compressed_pdf_bytes) / 1024
 
         # Clean up temporary files
-        os.unlink(temp_input_pdf.name)
-        os.unlink(temp_output_pdf.name)
+        os.unlink(temp_input_path)
+        os.unlink(temp_output_path)
 
         compressed_pdf_base64 = base64.b64encode(compressed_pdf_bytes).decode('utf-8')
 
@@ -101,7 +129,7 @@ def compress_pdf():
             'body': compressed_pdf_base64,
             'isBase64Encoded': True,
             'fileName': compressed_filename,
-            'originalSize': original_size_kb, # Use actual original size from frontend
+            'originalSize': original_size_kb,
             'compressedSize': compressed_size_kb
         }), 200
 
@@ -130,8 +158,7 @@ def pdf_to_text():
 
         pdf_bytes = base64.b64decode(pdf_file_base64)
         
-        # Open the PDF document from bytes using PyMuPDF (fitz)
-        import fitz # Importing here to ensure it's loaded only when needed
+        import fitz
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         extracted_text = ""
         for page_num in range(len(doc)):
